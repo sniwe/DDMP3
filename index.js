@@ -163,6 +163,39 @@ function removeHeldFile(id) {
     heldFiles.delete(id);
 }
 
+function resolveWixTitle(mediaTitle) {
+    const forcedTitle = String(process.env.WIX_FORCE_TITLE || '').trim();
+    return forcedTitle || mediaTitle;
+}
+
+async function checkWixForExisting(mediaTitle, wixEndpoint) {
+    if (!wixEndpoint) {
+        throw new Error('WIX_ENDPOINT is required.');
+    }
+
+    const response = await axiosInstance.get(wixEndpoint, {
+        params: {
+            mediaTitle: String(mediaTitle),
+            checkOnly: '1',
+        },
+        headers: {
+            Accept: '*/*',
+            'User-Agent': 'Mozilla/5.0',
+        },
+        validateStatus: () => true,
+    });
+
+    if (response.status >= 400) {
+        throw new Error(`Wix check failed (status ${response.status}): ${JSON.stringify(response.data)}`);
+    }
+
+    if (!response.data || response.data.ok !== true) {
+        throw new Error(`Wix check failed: ${JSON.stringify(response.data)}`);
+    }
+
+    return response.data.exists === true;
+}
+
 async function run(url, wixEndpoint, publicBaseUrl) {
     const { m3u8Url, articleOrdinal, articleTitle } = await fetchSharePageData(url);
 
@@ -170,6 +203,7 @@ async function run(url, wixEndpoint, publicBaseUrl) {
         ? `${articleOrdinal} ${articleTitle}`.trim()
         : `LJSW${articleOrdinal}`;
     const sanitizedTitle = sanitizeTitle(rawTitle);
+    const wixTitle = resolveWixTitle(sanitizedTitle);
     const finalAudioPath = buildHeldAudioPath(sanitizedTitle);
 
     console.log(`M3U8 URL: ${m3u8Url}`);
@@ -180,6 +214,11 @@ async function run(url, wixEndpoint, publicBaseUrl) {
     let uploadResult = null;
     let fileId = null;
     try {
+        const exists = await checkWixForExisting(wixTitle, wixEndpoint);
+        if (exists) {
+            return { skipped: true, reason: 'exists', mediaTitle: wixTitle };
+        }
+
         const { key, iv, tsUrls } = await extractDecryptionDetails(m3u8Url);
         await streamToFfmpeg(tsUrls, key, iv, finalAudioPath);
         if (!publicBaseUrl) {
@@ -201,8 +240,7 @@ async function uploadMp3UrlToWix(fileUrl, mediaTitle, wixEndpoint) {
         throw new Error('WIX_ENDPOINT is required.');
     }
 
-    const forcedTitle = String(process.env.WIX_FORCE_TITLE || '').trim();
-    const finalTitle = forcedTitle || mediaTitle;
+    const finalTitle = resolveWixTitle(mediaTitle);
 
     const params = {
         fileUrl,
