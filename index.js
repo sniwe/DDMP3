@@ -9,6 +9,7 @@ const os = require('os');
 const { sanitizeTitle } = require('./utils');
 
 const heldFiles = new Map();
+const heldRootDir = path.join(os.tmpdir(), 'dedao2mp3-held');
 
 const axiosInstance = axios.create({
     timeout: 30000,
@@ -137,6 +138,17 @@ function registerHeldFile(filePath) {
     return id;
 }
 
+function ensureHeldRoot() {
+    fs.mkdirSync(heldRootDir, { recursive: true });
+    return heldRootDir;
+}
+
+function buildHeldAudioPath(sanitizedTitle) {
+    const safeTitle = sanitizedTitle || 'audio';
+    const uniqueSuffix = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    return path.join(ensureHeldRoot(), `${safeTitle}-${uniqueSuffix}.mp3`);
+}
+
 function removeHeldFile(id) {
     const entry = heldFiles.get(id);
     if (!entry) {
@@ -158,8 +170,7 @@ async function run(url, wixEndpoint, publicBaseUrl) {
         ? `${articleOrdinal} ${articleTitle}`.trim()
         : `LJSW${articleOrdinal}`;
     const sanitizedTitle = sanitizeTitle(rawTitle);
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dedao2mp3-'));
-    const finalAudioPath = path.join(tempDir, `${sanitizedTitle}.mp3`);
+    const finalAudioPath = buildHeldAudioPath(sanitizedTitle);
 
     console.log(`M3U8 URL: ${m3u8Url}`);
     console.log(`Article ordinal: ${articleOrdinal}`);
@@ -178,14 +189,7 @@ async function run(url, wixEndpoint, publicBaseUrl) {
         const fileUrl = `${publicBaseUrl.replace(/\/+$/, '')}/files/${fileId}`;
         uploadResult = await uploadMp3UrlToWix(fileUrl, sanitizedTitle, wixEndpoint);
     } finally {
-        if (fileId) {
-            removeHeldFile(fileId);
-        }
-        try {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (error) {
-            console.warn(`Failed to clean temp directory ${tempDir}:`, error.message || error);
-        }
+        // Let the TTL cleanup remove the held file later to avoid 404s for async fetches.
     }
 
     console.log('Process completed successfully.');
