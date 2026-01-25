@@ -22,6 +22,11 @@ build/
 .next/
 out/
 
+# local artifacts
+eps/
+plans/
+ref/
+
 # system
 .DS_Store
 Thumbs.db
