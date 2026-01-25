@@ -507,6 +507,7 @@ async function fetchY2MateConfig() {
         throw new Error('Unable to locate Y2Mate config payload.');
     }
     try {
+        console.log('Y2Mate config payload loaded.');
         return JSON.parse(match[1]);
     } catch (error) {
         throw new Error('Failed to parse Y2Mate config payload.');
@@ -540,6 +541,7 @@ async function y2MateInit(config) {
     const paramName = String.fromCharCode(config[6]);
     const timestamp = Math.floor(Date.now() / 1000);
     const directUrl = `https://eta.${host}/api/v1/init?${paramName}=${encodeURIComponent(auth)}&t=${timestamp}`;
+    console.log('Y2Mate init (direct) request:', directUrl);
     const response = await axiosInstance.get(directUrl, {
         headers: {
             Accept: '*/*',
@@ -551,10 +553,12 @@ async function y2MateInit(config) {
     });
     const directData = parseJsonIfNeeded(response.data);
     if (response.status === 200 && directData && !isY2MateError(directData.error) && directData.convertURL) {
+        console.log('Y2Mate init (direct) success.');
         return { convertUrl: directData.convertURL, useProxy: false };
     }
 
     const proxyUrl = `${y2mateBaseUrl.replace(/\/+$/, '')}/~i/?${paramName}=${encodeURIComponent(auth)}&t=${timestamp}`;
+    console.log('Y2Mate init (proxy) request:', proxyUrl);
     const proxyResponse = await axiosInstance.get(proxyUrl, {
         headers: {
             Accept: '*/*',
@@ -568,12 +572,14 @@ async function y2MateInit(config) {
     if (proxyResponse.status !== 200 || !proxyData || isY2MateError(proxyData.error) || !proxyData.convertURL) {
         throw new Error(`Y2Mate init failed: ${JSON.stringify(proxyData || directData)}`);
     }
+    console.log('Y2Mate init (proxy) success.');
     return { convertUrl: proxyData.convertURL, useProxy: true };
 }
 
 async function y2MateConvert(convertUrl, videoId, format, useProxy) {
     const baseUrl = useProxy ? y2MateEndpoint('c', convertUrl) : convertUrl;
     const url = `${baseUrl}&v=${encodeURIComponent(videoId)}&f=${encodeURIComponent(format)}&t=${Math.floor(Date.now() / 1000)}`;
+    console.log('Y2Mate convert request:', url);
     const response = await axiosInstance.get(url, {
         headers: {
             Accept: '*/*',
@@ -593,14 +599,22 @@ async function y2MateConvert(convertUrl, videoId, format, useProxy) {
         throw new Error(`Y2Mate convert failed: ${JSON.stringify(data)}`);
     }
     if (data.redirect === 1 && data.redirectURL) {
+        console.log('Y2Mate convert redirecting.');
         return y2MateConvert(data.redirectURL, videoId, format, useProxy);
     }
+    console.log('Y2Mate convert response:', {
+        hasProgressUrl: !!data.progressURL,
+        hasDownloadUrl: !!data.downloadURL,
+        progress: data.progress,
+        title: data.title || '',
+    });
     return data;
 }
 
 async function y2MateProgress(progressUrl, useProxy) {
     const baseUrl = useProxy ? y2MateEndpoint('p', progressUrl) : progressUrl;
     const url = `${baseUrl}&t=${Math.floor(Date.now() / 1000)}`;
+    console.log('Y2Mate progress request:', url);
     const response = await axiosInstance.get(url, {
         headers: {
             Accept: '*/*',
@@ -613,6 +627,11 @@ async function y2MateProgress(progressUrl, useProxy) {
     if (typeof data === 'string') {
         throw new Error('Y2Mate progress returned non-JSON response.');
     }
+    console.log('Y2Mate progress response:', {
+        progress: data?.progress,
+        hasDownloadUrl: !!data?.downloadURL,
+        title: data?.title || '',
+    });
     return data;
 }
 
@@ -621,6 +640,7 @@ async function resolveY2MateDownload(videoId) {
     const initResult = await y2MateInit(config);
     const convertResult = await y2MateConvert(initResult.convertUrl, videoId, 'mp3', initResult.useProxy);
     if (config[3] === 1 && convertResult.downloadURL && convertResult.title) {
+        console.log('Y2Mate conversion completed immediately.');
         return {
             downloadUrl: convertResult.downloadURL,
             title: convertResult.title,
@@ -655,12 +675,14 @@ async function resolveY2MateDownload(videoId) {
     if (!downloadUrl) {
         throw new Error('Y2Mate did not return a download URL.');
     }
+    console.log('Y2Mate conversion completed after progress polling.');
     return { downloadUrl, title, useProxy: initResult.useProxy };
 }
 
 async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
     const baseUrl = useProxy ? y2MateEndpoint('d', downloadUrl) : downloadUrl;
     const finalUrl = `${baseUrl}&s=3&v=${encodeURIComponent(videoId)}&f=mp3`;
+    console.log('Y2Mate download request:', finalUrl);
     const response = await axiosInstance.get(finalUrl, {
         responseType: 'stream',
         headers: {
