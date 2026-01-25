@@ -476,7 +476,9 @@ async function runYouTube(url, wixEndpoint, publicBaseUrl) {
         }
         fileId = registerHeldFile(finalAudioPath);
         const fileUrl = `${publicBaseUrl.replace(/\/+$/, '')}/files/${fileId}`;
+        console.log('Uploading to Wix with fileUrl:', fileUrl);
         uploadResult = await uploadMp3UrlToWix(fileUrl, finalMediaTitle, wixEndpoint);
+        console.log('Wix upload result received.');
     } finally {
         // Let the TTL cleanup remove the held file later to avoid 404s for async fetches.
     }
@@ -683,14 +685,33 @@ async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
     const baseUrl = useProxy ? y2MateEndpoint('d', downloadUrl) : downloadUrl;
     const finalUrl = `${baseUrl}&s=3&v=${encodeURIComponent(videoId)}&f=mp3`;
     console.log('Y2Mate download request:', finalUrl);
-    const response = await axiosInstance.get(finalUrl, {
-        responseType: 'stream',
-        headers: {
-            Accept: '*/*',
-            Origin: y2mateBaseUrl.replace(/\/+$/, ''),
-            Referer: y2mateBaseUrl,
-            'User-Agent': y2mateUserAgent,
-        },
+    let response;
+    try {
+        response = await axiosInstance.get(finalUrl, {
+            responseType: 'stream',
+            headers: {
+                Accept: '*/*',
+                Origin: y2mateBaseUrl.replace(/\/+$/, ''),
+                Referer: y2mateBaseUrl,
+                'User-Agent': y2mateUserAgent,
+            },
+            validateStatus: () => true,
+        });
+    } catch (error) {
+        console.error('Y2Mate download request failed:', error?.message || error);
+        throw error;
+    }
+    if (response.status >= 400) {
+        console.error('Y2Mate download HTTP error:', {
+            status: response.status,
+            statusText: response.statusText,
+        });
+        throw new Error(`Y2Mate download failed with status ${response.status}`);
+    }
+    console.log('Y2Mate download response OK:', {
+        status: response.status,
+        contentType: response.headers?.['content-type'] || '',
+        contentLength: response.headers?.['content-length'] || '',
     });
     await new Promise((resolve, reject) => {
         const stream = fs.createWriteStream(outputPath);
@@ -699,6 +720,7 @@ async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
         stream.on('finish', resolve);
         stream.on('error', reject);
     });
+    console.log(`Y2Mate download saved: ${outputPath}`);
 }
 
 async function uploadMp3UrlToWix(fileUrl, mediaTitle, wixEndpoint) {
