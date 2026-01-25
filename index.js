@@ -696,6 +696,7 @@ async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
                 'User-Agent': y2mateUserAgent,
             },
             validateStatus: () => true,
+            timeout: 0,
         });
     } catch (error) {
         console.error('Y2Mate download request failed:', error?.message || error);
@@ -708,11 +709,16 @@ async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
         });
         throw new Error(`Y2Mate download failed with status ${response.status}`);
     }
+    const contentType = response.headers?.['content-type'] || '';
+    const contentLength = response.headers?.['content-length'] || '';
     console.log('Y2Mate download response OK:', {
         status: response.status,
-        contentType: response.headers?.['content-type'] || '',
-        contentLength: response.headers?.['content-length'] || '',
+        contentType,
+        contentLength,
     });
+    if (contentType && !/audio|octet-stream/i.test(contentType)) {
+        throw new Error(`Y2Mate download returned unexpected content-type: ${contentType}`);
+    }
     await new Promise((resolve, reject) => {
         const stream = fs.createWriteStream(outputPath);
         response.data.pipe(stream);
@@ -720,7 +726,14 @@ async function downloadY2MateMp3(downloadUrl, videoId, outputPath, useProxy) {
         stream.on('finish', resolve);
         stream.on('error', reject);
     });
-    console.log(`Y2Mate download saved: ${outputPath}`);
+    let sizeBytes = 0;
+    try {
+        sizeBytes = fs.statSync(outputPath).size;
+    } catch {}
+    console.log(`Y2Mate download saved: ${outputPath} bytes=${sizeBytes}`);
+    if (!sizeBytes || sizeBytes < 50 * 1024) {
+        throw new Error(`Y2Mate download too small (${sizeBytes} bytes)`);
+    }
 }
 
 async function uploadMp3UrlToWix(fileUrl, mediaTitle, wixEndpoint) {
@@ -828,6 +841,11 @@ app.get('/files/:id', (req, res) => {
     if (!entry) {
         return res.status(404).json({ ok: false, error: 'File not found.' });
     }
+    let sizeBytes = 0;
+    try {
+        sizeBytes = fs.statSync(entry.filePath).size;
+    } catch {}
+    console.log(`Serving file id=${id} path=${entry.filePath} bytes=${sizeBytes}`);
     res.setHeader('Content-Type', 'audio/mpeg');
     const stream = fs.createReadStream(entry.filePath);
     stream.on('error', (error) => {
