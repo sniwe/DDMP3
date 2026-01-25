@@ -15,6 +15,7 @@ const y2mateBaseUrl = 'https://v1.y2mate.nu/';
 const y2mateUserAgent = 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36';
 const epsDir = path.join(__dirname, 'eps');
 const saveLocalEps = String(process.env.SAVE_LOCAL_EPS || '').trim() === '1';
+const youtubeMode = String(process.env.YOUTUBE_MODE || 'y2mate').trim().toLowerCase();
 
 const axiosInstance = axios.create({
     timeout: 30000,
@@ -69,17 +70,25 @@ function isDedaoUrl(url) {
 }
 
 function isYouTubeUrl(url) {
-    try {
-        return ytdl.validateURL(String(url || ''));
-    } catch {
-        return false;
-    }
+    return /(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i.test(String(url || ''));
 }
 
 function detectSource(url) {
     if (isYouTubeUrl(url)) return 'youtube';
     if (isDedaoUrl(url)) return 'dedao';
     return 'other';
+}
+
+function extractYouTubeIdLoose(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    try {
+        return ytdl.getURLVideoID(raw);
+    } catch {
+        // Fall back to basic regex match if ytdl rejects the URL.
+        const match = raw.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
+        return match ? match[1] : '';
+    }
 }
 
 async function fetchSharePageData(url) {
@@ -351,6 +360,8 @@ async function runYouTube(url, wixEndpoint, publicBaseUrl) {
     let metaTitle = '';
     let channel = '';
     let usedFallback = false;
+    let usedDirect = false;
+    let usedY2Mate = false;
     try {
         const metadata = await fetchYouTubeMetadata(url);
         metaTitle = metadata.title;
@@ -377,17 +388,63 @@ async function runYouTube(url, wixEndpoint, publicBaseUrl) {
             return { skipped: true, reason: 'exists', mediaTitle: wixTitle };
         }
 
-        if (!usedFallback) {
+        const mode = youtubeMode || 'y2mate';
+        const y2mateOnly = mode === 'y2mate-only';
+        const directOnly = mode === 'direct';
+        const tryY2MateFirst = !directOnly;
+        console.log(`YouTube mode resolved: ${mode}`);
+
+        if (tryY2MateFirst) {
             try {
-                await streamYouTubeToMp3(url, finalAudioPath);
+                const videoId = extractYouTubeIdLoose(url);
+                if (!videoId) {
+                    throw new Error('Unable to extract YouTube video ID for Y2Mate.');
+                }
+                const fallbackResult = await resolveY2MateDownload(videoId);
+                const fallbackTitle = fallbackResult.title || metaTitle || `youtube-${videoId}`;
+                const fallbackSanitized = sanitizeTitle(fallbackTitle);
+                const fallbackWixTitle = resolveWixTitle(fallbackSanitized);
+                if (fallbackWixTitle !== wixTitle) {
+                    const alreadyExists = await checkWixForExisting(fallbackWixTitle, wixEndpoint);
+                    if (alreadyExists) {
+                        return { skipped: true, reason: 'exists', mediaTitle: fallbackWixTitle };
+                    }
+                    wixTitle = fallbackWixTitle;
+                    finalMediaTitle = fallbackSanitized;
+                }
+                await downloadY2MateMp3(fallbackResult.downloadUrl, videoId, finalAudioPath, fallbackResult.useProxy);
+                usedY2Mate = true;
             } catch (error) {
-                console.warn('Direct YouTube download failed, switching to Y2Mate:', error.message || error);
+                if (y2mateOnly) {
+                    throw error;
+                }
+                console.warn('Y2Mate primary failed, switching to direct YouTube:', error.message || error);
                 usedFallback = true;
             }
         }
 
-        if (usedFallback) {
-            const videoId = extractYouTubeId(url);
+        if (!usedY2Mate && !directOnly && !usedFallback) {
+            usedFallback = true;
+        }
+
+        if (!usedY2Mate) {
+            try {
+                await streamYouTubeToMp3(url, finalAudioPath);
+                usedDirect = true;
+            } catch (error) {
+                if (directOnly) {
+                    throw error;
+                }
+                console.warn('Direct YouTube download failed:', error.message || error);
+                usedFallback = true;
+            }
+        }
+
+        if (usedFallback && !usedY2Mate) {
+            const videoId = extractYouTubeIdLoose(url);
+            if (!videoId) {
+                throw new Error('Unable to extract YouTube video ID for Y2Mate fallback.');
+            }
             const fallbackResult = await resolveY2MateDownload(videoId);
             const fallbackTitle = fallbackResult.title || metaTitle || `youtube-${videoId}`;
             const fallbackSanitized = sanitizeTitle(fallbackTitle);
@@ -401,6 +458,7 @@ async function runYouTube(url, wixEndpoint, publicBaseUrl) {
                 finalMediaTitle = fallbackSanitized;
             }
             await downloadY2MateMp3(fallbackResult.downloadUrl, videoId, finalAudioPath, fallbackResult.useProxy);
+            usedY2Mate = true;
         }
 
         if (saveLocalEps) {
@@ -423,7 +481,8 @@ async function runYouTube(url, wixEndpoint, publicBaseUrl) {
         // Let the TTL cleanup remove the held file later to avoid 404s for async fetches.
     }
 
-    console.log(`YouTube process completed successfully.${usedFallback ? ' (Used Y2Mate fallback)' : ''}`);
+    const modeNote = usedY2Mate ? 'Y2Mate' : (usedDirect ? 'Direct' : 'Unknown');
+    console.log(`YouTube process completed successfully. mode=${modeNote}${usedFallback ? ' fallback=1' : ''}`);
     return {
         ...(uploadResult || {}),
         mediaTitle: wixTitle,
