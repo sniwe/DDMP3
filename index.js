@@ -757,6 +757,16 @@ async function uploadMp3UrlToWix(fileUrl, mediaTitle, wixEndpoint) {
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
 
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+    return next();
+});
+
 app.get('/fetch', async (req, res) => {
     const url = String(req.query.url || '').trim();
     const sourceParam = String(req.query.source || '').trim().toLowerCase();
