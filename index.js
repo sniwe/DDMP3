@@ -148,7 +148,7 @@ async function streamToFfmpeg(tsUrls, key, iv, outputPath) {
         const ffmpeg = spawn('ffmpeg', [
             '-f', 'mpegts',
             '-i', 'pipe:0',
-            '-af', 'atempo=1.15',
+            '-af', 'atempo=1.0',
             '-f', 'mp3',
             outputPath,
             '-y',
@@ -768,7 +768,7 @@ async function uploadMp3UrlToWix(fileUrl, mediaTitle, wixEndpoint) {
 }
 
 const app = express();
-const port = Number.parseInt(process.env.PORT || '3000', 10);
+const port = Number.parseInt(process.env.PORT || '0', 10);
 
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -855,6 +855,10 @@ app.get('/files/:id', (req, res) => {
     stream.pipe(res);
 });
 
-app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
-});
+if (require.main === module) {
+    const server = app.listen(port, () => {
+        console.log(`Server listening on port ${server.address().port}`);
+    });
+}
+
+module.exports = { extractDecryptionDetails, streamToFfmpeg, buildEpsAudioPath };
